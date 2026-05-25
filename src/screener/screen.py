@@ -101,9 +101,21 @@ def _build_row(c: Constituent, f: Fundamentals) -> dict:
             ebitda,
         )
 
-    # --- P/E: prefer info, fall back to price/EPS ------------------------
-    pe_val, pe_ok = metrics._num(info.get("trailingPE")), False
-    pe_ok = pe_val is not None and pe_val > 0
+    # --- Current price: prefer NSE (authoritative/fresh), else Yahoo -----
+    price = metrics._num(f.nse_price)
+    price_source = "NSE" if price is not None else None
+    if price is None:
+        price = metrics._num(info.get("currentPrice"))
+        price_source = "Yahoo" if price is not None else None
+
+    # --- P/E: NSE price / trailing EPS first, then Yahoo trailingPE ------
+    pe_val, pe_ok = (None, False)
+    if f.nse_price is not None:
+        pe_val, pe_ok = metrics.pe_ratio(f.nse_price, info.get("trailingEps"))
+    if not pe_ok:
+        yahoo_pe = metrics._num(info.get("trailingPE"))
+        if yahoo_pe is not None and yahoo_pe > 0:
+            pe_val, pe_ok = yahoo_pe, True
     if not pe_ok:
         pe_val, pe_ok = metrics.pe_ratio(info.get("currentPrice"), info.get("trailingEps"))
 
@@ -146,6 +158,7 @@ def _build_row(c: Constituent, f: Fundamentals) -> dict:
         "ticker": c.ticker,
         "name": info.get("longName") or info.get("shortName") or c.name,
         "sector": sec,
+        "price": price, "price_source": price_source,
         "pe": pe_val, "pe_ok": pe_ok,
         "ev_ebitda": ev_ebitda_val, "ev_ebitda_ok": ev_ok,
         "roce": roce_val, "roce_ok": roce_ok,
@@ -207,14 +220,19 @@ def default_thresholds() -> Dict[str, float]:
 def build_table(
     constituents: Optional[List[Constituent]] = None,
     force_refresh: bool = False,
+    use_nse_price: bool = config.USE_NSE_PRICE,
 ):
     """Expensive step: fetch fundamentals and build the metric table.
 
     Returns ``(df, medians, financials_df)``. Independent of thresholds, so the
-    UI can cache this and re-filter cheaply when sliders move.
+    UI can cache this and re-filter cheaply when sliders move. When
+    ``use_nse_price`` is set, the last-traded price comes from NSE (fundamentals
+    still come from yfinance).
     """
     cons = constituents if constituents is not None else load_universe()
-    fundamentals = batch_fetch([c.ticker for c in cons], force=force_refresh)
+    fundamentals = batch_fetch(
+        [c.ticker for c in cons], force=force_refresh, use_nse_price=use_nse_price
+    )
 
     fin_rows, rows = [], []
     for c in cons:
@@ -284,9 +302,10 @@ def run_screen(
     constituents: Optional[List[Constituent]] = None,
     force_refresh: bool = False,
     thresholds: Optional[Dict[str, float]] = None,
+    use_nse_price: bool = config.USE_NSE_PRICE,
 ) -> ScreenResult:
     """Full pipeline (build + apply). Used by the CLI and tests."""
-    df, medians, financials_df = build_table(constituents, force_refresh)
+    df, medians, financials_df = build_table(constituents, force_refresh, use_nse_price)
     return apply_screen(df, medians, financials_df, thresholds)
 
 
@@ -329,6 +348,8 @@ if __name__ == "__main__":  # lightweight smoke entry point
     parser = argparse.ArgumentParser(description="Run the Indian value screener.")
     parser.add_argument("--tickers", nargs="*", help="NSE symbols to screen (default: full universe)")
     parser.add_argument("--force", action="store_true", help="ignore cache, refetch")
+    parser.add_argument("--nse-price", action="store_true",
+                        help="use NSE last-traded price instead of Yahoo (needs NSE reachable)")
     args = parser.parse_args()
 
     if args.tickers:
@@ -339,9 +360,9 @@ if __name__ == "__main__":  # lightweight smoke entry point
     else:
         cons = None
 
-    res = run_screen(constituents=cons, force_refresh=args.force)
+    res = run_screen(constituents=cons, force_refresh=args.force, use_nse_price=args.nse_price)
     print(f"passed={len(res.passed)} rejected={len(res.rejected)} "
           f"excluded={len(res.excluded)} financials={len(res.financials)}")
     if not res.passed.empty:
-        cols = ["rank", "symbol", "sector", "pe", "ev_ebitda", "roce", "de", "piotroski", "cagr_3y"]
+        cols = ["rank", "symbol", "sector", "price", "pe", "ev_ebitda", "roce", "de", "piotroski", "cagr_3y"]
         print(res.passed[cols].to_string(index=False))

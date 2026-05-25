@@ -33,3 +33,13 @@ FETCH_RETRIES = 3      # per-ticker retries with exponential backoff
 # Minimum annual reporting periods needed for the statement-derived metrics.
 MIN_PERIODS_CAGR = 4       # 3Y CAGR needs t and t-3
 MIN_PERIODS_PIOTROSKI = 2  # F-score compares current vs prior year
+
+# --- NSE live price (optional, opt-in) -----------------------------------
+# When enabled, the last-traded price comes from NSE (more authoritative /
+# fresher than Yahoo's delayed quote) while all fundamentals stay on yfinance.
+# Off by default: it needs NSE to be network-reachable, makes one extra request
+# per ticker, and NSE throttles bulk access. Falls back to Yahoo on any failure.
+USE_NSE_PRICE = False
+NSE_BASE = "https://www.nseindia.com"
+NSE_TIMEOUT = 10  # seconds per NSE request
+

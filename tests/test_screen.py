@@ -67,7 +67,7 @@ def test_pipeline_buckets(monkeypatch):
         "HDFCBANK.NS": Fundamentals("HDFCBANK.NS", {"sector": "Financial Services"}),
         "NODATA.NS": Fundamentals("NODATA.NS", error="blocked"),
     }
-    monkeypatch.setattr(screen, "batch_fetch", lambda tickers, force=False: fake)
+    monkeypatch.setattr(screen, "batch_fetch", lambda tickers, force=False, use_nse_price=False: fake)
 
     res = screen.run_screen(constituents=cons)
 
@@ -88,8 +88,28 @@ def test_threshold_override_can_exclude_pick(monkeypatch):
         "GOOD.NS": _fund("GOOD.NS", ev=8, pe=12),
         "EXP.NS": _fund("EXP.NS", ev=20, pe=30),
     }
-    monkeypatch.setattr(screen, "batch_fetch", lambda tickers, force=False: fake)
+    monkeypatch.setattr(screen, "batch_fetch", lambda tickers, force=False, use_nse_price=False: fake)
 
     # Demand a 50% CAGR that GOOD's ~14.5% can't meet -> no picks.
     res = screen.run_screen(constituents=cons, thresholds={"SALES_CAGR_MIN": 0.50})
     assert res.passed.empty
+
+
+def test_build_row_prefers_nse_price_for_price_and_pe():
+    f = _fund("GOOD.NS", ev=8, pe=12)  # Yahoo trailingPE = 12
+    f.info["trailingEps"] = 100.0
+    f.nse_price = 1500.0
+    row = screen._build_row(Constituent("GOOD", "Good", "IT", "GOOD.NS"), f)
+    assert row["price_source"] == "NSE"
+    assert row["price"] == 1500.0
+    assert abs(row["pe"] - 15.0) < 1e-6  # 1500 / 100, overrides Yahoo's 12
+
+
+def test_build_row_falls_back_to_yahoo_when_no_nse_price():
+    f = _fund("GOOD.NS", ev=8, pe=12)
+    f.info["currentPrice"] = 999.0
+    f.nse_price = None
+    row = screen._build_row(Constituent("GOOD", "Good", "IT", "GOOD.NS"), f)
+    assert row["price_source"] == "Yahoo"
+    assert row["price"] == 999.0
+    assert abs(row["pe"] - 12.0) < 1e-6  # Yahoo trailingPE

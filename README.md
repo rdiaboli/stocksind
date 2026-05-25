@@ -60,6 +60,7 @@ CLI (full universe or a subset):
 python -m src.screener.screen                          # whole Nifty 500
 python -m src.screener.screen --tickers TCS INFY ITC   # a few names
 python -m src.screener.screen --force                  # ignore cache, refetch
+python -m src.screener.screen --nse-price              # use NSE live price (see below)
 ```
 
 Tests (no network required):
@@ -100,6 +101,26 @@ screener mitigates this by:
 
 The `data.py` layer is the single seam for data; a paid/key-based fundamentals
 provider can be dropped in behind the same interface if quality proves too thin.
+
+## Optional: NSE live price
+
+By default the current price comes from Yahoo (a delayed quote bundled into the
+fundamentals fetch). You can instead use **NSE** as the price source for a more
+authoritative, fresher last-traded price — fundamentals still come from yfinance:
+
+- UI: tick **"Use NSE live price (slower)"** in the sidebar.
+- CLI: pass `--nse-price`.
+- Default: set `USE_NSE_PRICE = True` in `config.py`.
+
+How it behaves: NSE has no official public API, so the client (`nse.py`) performs
+a browser-like cookie handshake against `nseindia.com` and calls the same
+`quote-equity` endpoint the site uses. The price is fetched **fresh** each run
+(never pinned to the 24h fundamentals cache) and **falls back to Yahoo per stock**
+if NSE is unreachable or throttled. Caveats: NSE must be network-reachable
+(blocked on locked-down networks), it adds one request per ticker, and NSE
+rate-limits bulk access — so it is slower and off by default. When NSE supplies
+the price, P/E is recomputed as `NSE price / trailing EPS`, and the results table
+shows a `price_source` column so you can see which source was used per stock.
 
 ## Not in v1
 

@@ -25,6 +25,7 @@ class Fundamentals:
     balance: pd.DataFrame = field(default_factory=pd.DataFrame)
     cashflow: pd.DataFrame = field(default_factory=pd.DataFrame)
     error: Optional[str] = None
+    nse_price: Optional[float] = None  # NSE last-traded price (when enabled); not cached
 
     @property
     def ok(self) -> bool:
@@ -119,27 +120,48 @@ def _fetch_remote(ticker: str) -> Fundamentals:
     return Fundamentals(ticker, error=f"{type(last_err).__name__}: {last_err}")
 
 
-def fetch_fundamentals(ticker: str, force: bool = False) -> Fundamentals:
-    """Return fundamentals for a ticker, using cache unless stale or ``force``."""
+def _enrich_nse_price(f: Fundamentals) -> None:
+    """Attach NSE's last-traded price (fetched fresh, never cached to disk)."""
+    from . import nse  # local import keeps NSE optional
+
+    symbol = f.ticker.removesuffix(config.YF_SUFFIX)
+    f.nse_price = nse.last_price(symbol)
+
+
+def fetch_fundamentals(
+    ticker: str, force: bool = False, use_nse_price: bool = config.USE_NSE_PRICE
+) -> Fundamentals:
+    """Return fundamentals for a ticker, using cache unless stale or ``force``.
+
+    Fundamentals are cached (24h TTL); the NSE price, when enabled, is fetched
+    fresh each call so a fast-moving price never gets pinned to the slow
+    fundamentals cache.
+    """
+    f = None
     if not force and _cache_fresh(ticker):
         try:
-            return _load(ticker)
+            f = _load(ticker)
         except Exception:  # noqa: BLE001 - corrupt cache, refetch
-            pass
-    f = _fetch_remote(ticker)
-    if f.ok:
-        try:
-            _save(f)
-        except Exception:  # noqa: BLE001 - caching is best-effort
-            pass
+            f = None
+    if f is None:
+        f = _fetch_remote(ticker)
+        if f.ok:
+            try:
+                _save(f)
+            except Exception:  # noqa: BLE001 - caching is best-effort
+                pass
+    if use_nse_price and f.ok:
+        _enrich_nse_price(f)
     return f
 
 
-def batch_fetch(tickers: List[str], force: bool = False) -> Dict[str, Fundamentals]:
+def batch_fetch(
+    tickers: List[str], force: bool = False, use_nse_price: bool = config.USE_NSE_PRICE
+) -> Dict[str, Fundamentals]:
     """Fetch many tickers concurrently. Returns a ticker -> Fundamentals map."""
     results: Dict[str, Fundamentals] = {}
     with ThreadPoolExecutor(max_workers=config.FETCH_WORKERS) as pool:
-        futures = {pool.submit(fetch_fundamentals, t, force): t for t in tickers}
+        futures = {pool.submit(fetch_fundamentals, t, force, use_nse_price): t for t in tickers}
         for fut in as_completed(futures):
             t = futures[fut]
             try:

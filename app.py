@@ -19,15 +19,17 @@ from src.screener.universe import load_universe
 st.set_page_config(page_title="Indian Value Screener", layout="wide")
 
 DISPLAY_COLS = [
-    "rank", "symbol", "name", "sector", "pe", "ev_ebitda", "roce", "de",
-    "piotroski", "cagr_3y", "cheap_reason", "data_confidence",
+    "rank", "symbol", "name", "sector", "price", "price_source", "pe", "ev_ebitda",
+    "roce", "de", "piotroski", "cagr_3y", "cheap_reason", "data_confidence",
 ]
 
 
 @st.cache_data(show_spinner="Fetching fundamentals (Nifty 500)…")
-def _load_table(force: bool):
+def _load_table(force: bool, use_nse_price: bool):
     cons = load_universe()
-    df, medians, fin = screen.build_table(constituents=cons, force_refresh=force)
+    df, medians, fin = screen.build_table(
+        constituents=cons, force_refresh=force, use_nse_price=use_nse_price
+    )
     return df, medians, fin, len(cons)
 
 
@@ -38,7 +40,7 @@ def _fmt(df: pd.DataFrame) -> pd.DataFrame:
     for c in ("roce", "cagr_3y"):
         if c in out:
             out[c] = (out[c] * 100).round(1)
-    for c in ("pe", "ev_ebitda", "de"):
+    for c in ("pe", "ev_ebitda", "de", "price"):
         if c in out:
             out[c] = out[c].round(2)
     return out
@@ -55,6 +57,11 @@ def main():
     sb = st.sidebar
     sb.header("Controls")
     force = sb.button("🔄 Refresh data (refetch)")
+    use_nse_price = sb.checkbox(
+        "Use NSE live price (slower)", value=bool(config.USE_NSE_PRICE),
+        help="Last-traded price from NSE instead of Yahoo's delayed quote. "
+             "Needs NSE to be network-reachable; falls back to Yahoo per stock on failure.",
+    )
     sb.markdown("---")
     sb.subheader("Thresholds")
     roce_min = sb.slider("ROCE >", 0.0, 0.40, float(config.ROCE_MIN), 0.01, format="%.2f")
@@ -70,7 +77,7 @@ def main():
     if force:
         _load_table.clear()
     try:
-        df, medians, fin, n = _load_table(force=force)
+        df, medians, fin, n = _load_table(force=force, use_nse_price=use_nse_price)
     except Exception as e:  # noqa: BLE001
         st.error(f"Failed to build table: {e}")
         return
@@ -109,7 +116,7 @@ def main():
         if res.rejected.empty:
             st.info("Nothing here.")
         else:
-            cols = [c for c in ["symbol", "name", "sector", "pe", "ev_ebitda", "roce",
+            cols = [c for c in ["symbol", "name", "sector", "price", "pe", "ev_ebitda", "roce",
                                 "de", "piotroski", "cagr_3y", "reject_reason"] if c in res.rejected.columns]
             st.dataframe(_fmt(res.rejected[cols]), width="stretch", hide_index=True)
 
